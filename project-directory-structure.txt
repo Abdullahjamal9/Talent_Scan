@@ -1,0 +1,48 @@
+├── app/
+│   ├── __init__.py
+│   ├── main.py                 # Entry point for the FastAPI app
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── config.py           # Configuration settings
+│   │   ├── security.py         # Security utilities (JWT, OAuth, etc.)
+│   └── api/
+│       ├── __init__.py
+│       ├── dependencies.py     # Common dependencies for routes
+│       ├── v1/                 # Versioned APIs
+│       │   ├── __init__.py
+│       │   ├── endpoints/
+│       │   │   ├── __init__.py
+│       │   │   ├── user.py     # Routes related to user operations
+│       │   │   ├── item.py     # Routes related to item operations
+│       │   ├── routers.py      # API router initialization
+│   ├── db/
+│   │   ├── __init__.py
+│   │   ├── base.py             # Base models and database setup
+│   │   ├── session.py          # Database session management
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   ├── user.py         # User model
+│   │   │   ├── item.py         # Item model
+│   │   ├── schemas/
+│   │   │   ├── __init__.py
+│   │   │   ├── user.py         # User schemas (Pydantic models)
+│   │   │   ├── item.py         # Item schemas
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── user_service.py     # User-related business logic
+│   │   ├── item_service.py     # Item-related business logic
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   ├── logging.py          # Logging configuration
+│   │   ├── helpers.py          # Miscellaneous helper functions
+│   ├── tests/
+│       ├── __init__.py
+│       ├── test_user.py        # User-related test cases
+│       ├── test_item.py        # Item-related test cases
+├── .env                         # Environment variables
+├── .gitignore
+├── alembic/                     # Alembic for database migrations
+│   ├── env.py
+│   └── versions/
+├── requirements.txt             # Project dependencies
+└── README.md                    # Project documentation

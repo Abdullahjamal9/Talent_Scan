@@ -1,0 +1,56 @@
+candidate:
+    _id: string
+    fullName: string
+    bio: string
+    address: string
+    age: string
+    gender: male | female
+    phone: string
+    email: string
+    skills: string[]
+    qualification: {
+        institute: string
+        program: string
+        startDate: Date
+        endDate: Date
+        description: string 
+    }[]
+    experience: {
+        company/organization: string
+        role: string
+        startDate: Date
+        endDate: Date
+        description: string 
+    }[]
+    socials: {
+        linkedin: string
+    }[]
+
+
+company:
+    _id: string
+    name: string
+    address: string
+    totalEmployees: number
+    socials: {
+        linkedin: string
+    }[]
+
+jobPost:
+    _id: string
+    company: companyId
+    role: string
+    minimumSalary: string
+    maximumSalary: string
+    payingCurrency: string // USD, INR, ...
+    description: string
+    jobType: full-time | part-time
+    jobType: onsite | remote | hybrid
+    jobType: long term | contract
+    isAcceptingApplications: string
+
+jobApplication:
+    candidate: candidateId
+    company: companyId 
+    job: jobPostId
+    

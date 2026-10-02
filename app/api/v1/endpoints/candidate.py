@@ -1,129 +1,114 @@
-from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Request, status
-from app.db.schemas.candidate import CandidateCreate, CandidateSignInRequest, Socials, Qualification, Experience
-from app.services.candidate import create_candidate, sign_in_candidate, get_candidate_by_id, update_candidate, get_all_candidates
-from enum import Enum
-from app.utils.upload_file import upload_file
-from app.utils.parsing import process_resumes
-from typing import Literal, List, Optional
 import json
-import time
-from datetime import datetime, date
-from pydantic import ValidationError
-import os
+from datetime import datetime
+from typing import List, Literal, Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
+from pydantic import EmailStr, TypeAdapter, ValidationError
+
+from app.core.deps import require_candidate
+from app.db.schemas.candidate import CandidateSignInRequest, Experience, Qualification, Socials
+from app.services.candidate import (
+    create_candidate, get_all_candidates, get_candidate_by_id, sign_in_candidate, update_candidate,
+)
+from app.utils.jwt import create_jwt_token
+from app.utils.parsing import parse_resume
+from app.utils.upload_file import upload_file
 
 router = APIRouter()
 
-class Candidate_Routes(str, Enum):
-    SIGN_IN = '/sign-in'
-    SIGN_UP = '/sign-up'
-    GET_CANDIDATE_BY_ID = '/{id}'
-    CANDIDATE_ME = '/me'
-    PROFILE_EDIT = '/edit'
-    LIST_CANDIDATES = '/list'
+_email = TypeAdapter(EmailStr)
 
 
-@router.post(Candidate_Routes.SIGN_IN.value)
-async def sign_in(candidate: CandidateSignInRequest):
+def _parse_date(value: Optional[str]) -> Optional[str]:
+    """Converts MM/YYYY from the resume parser to an ISO string (stored in a JSON column)."""
     try:
-        result = await sign_in_candidate(candidate)
-        return {"message": "Candidate signed in successfully", "data": result}
-    except Exception as e:
-        print('error',e)
-        raise HTTPException(status_code=e.status_code, detail=str(e.detail))
+        return datetime.strptime(value, "%m/%Y").isoformat() if value else None
+    except ValueError:
+        return None
 
 
+def _with_dates(item: dict, start: Optional[str], end: Optional[str]) -> dict:
+    item["startDate"] = _parse_date(start)
+    item["endDate"] = _parse_date(end)
+    return {k: v for k, v in item.items() if v is not None}
 
-@router.post(Candidate_Routes.SIGN_UP.value)
+
+def _json_form(value: str, field: str):
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail=f"Field {field} must be valid JSON")
+
+
+@router.post("/sign-in")
+async def sign_in(candidate: CandidateSignInRequest):
+    result = await sign_in_candidate(candidate)
+    return {"message": "Candidate signed in successfully", "data": result}
+
+
+@router.post("/sign-up")
 async def sign_up(
     fullName: str = Form(...),
     email: str = Form(...),
-    password: str = Form(...),
+    password: str = Form(..., min_length=7),
+    gender: Literal["male", "female", ""] = Form(""),  # self-declared, needed for gender-specific roles
     resume: UploadFile = File(...),
 ):
     try:
-        # Upload the resume file
-        file_location = await upload_file(resume)
+        email = str(_email.validate_python(email))
+    except ValidationError:
+        raise HTTPException(status_code=422, detail="Invalid email address")
 
-        # Process the resume to extract data
-        result = process_resumes([file_location])
-        print(result["results"][0]["data"])  # This prints the extracted data
+    resume_path = await upload_file(resume)
 
-        # Extract data from the result
-        data = result["results"][0]["data"]
+    # Resume parsing is best-effort: the account is still created if the parser fails.
+    data = await run_in_threadpool(parse_resume, resume_path) or {}
 
-        # Gender handling: ensure it’s only "male", "female", or ""
-        gender = data.get("gender", "").strip().lower()
-        if gender not in ["male", "female"]:
-            gender = ""
+    candidate = await create_candidate({
+        "fullName": fullName,
+        "email": email,
+        "password": password,
+        "about": data.get("bio", ""),
+        "gender": gender,
+        "skills": data.get("skills", []),
+        "resume": resume_path,
+        "experience": [
+            _with_dates({
+                "company_or_organization": (e.get("company") or "").strip(),
+                "role": (e.get("title") or "").strip(),
+                "description": e.get("description") or "",
+            }, e.get("start_date"), e.get("end_date"))
+            for e in data.get("experience", [])
+        ],
+        "qualification": [
+            _with_dates({
+                "institute": (q.get("institution") or "").strip(),
+                "program": (q.get("degree") or "").strip(),
+                "description": q.get("description") or "",
+            }, q.get("start_date"), q.get("end_date"))
+            for q in data.get("qualification", [])
+        ],
+    })
 
-        # Function to parse date strings to datetime.date
-        def parse_date(date_str: str) -> Optional[datetime]:
-            try:
-                # You can adjust the format here if necessary
-                return datetime.strptime(date_str, "%m/%Y") if date_str else None
-            except ValueError:
-                return None
+    token = create_jwt_token({"id": candidate["_id"], "email": candidate["email"], "role": "candidate"})
+    return {
+        "message": "Candidate created successfully",
+        "candidate": candidate,
+        "token": token,
+        "resumeParsed": bool(data),
+    }
 
-        # Convert experience and qualification dates
-        experience_data = [
-            {
-                "company_or_organization": exp.get("company", "").strip(),
-                "role": exp.get("title", "").strip(),
-                "description": exp.get("description", "")
-            }
-            for exp in data.get("experience", [])
-        ]
 
-        qualification_data = [
-            {
-                "institute": qual.get("institution", "").strip(),
-                "program": qual.get("degree", "").strip(),
-                "description": qual.get("description", "")
-            }
-            for qual in data.get("qualification", [])
-        ]
+# Fixed paths must be declared before the id route
+@router.get("/me")
+async def candidate_me(user: dict = Depends(require_candidate)):
+    return {"message": "success", "candidate": await get_candidate_by_id(user["id"])}
 
-        # Create the candidate object
-        candidate = {
-            "fullName":fullName,
-            "about": data.get("bio", ""),
-            "age": data.get("age", ""),
-            "email":email,
-            "password":password,
-            "skills":data.get("skills", []),
-            "resume":file_location,
-            "gender":gender,
-            "experience":experience_data,
-            "qualification":qualification_data
-        }
 
-        print(candidate)
-
-        # Call the database function to create the candidate
-        # result = await create_candidate(candidate)
-
-        # Return the response
-        return {"message": "Candidate created successfully", "candidate": "result"}
-
-    except ValidationError as e:
-        print('Validation error:', e.errors())
-        raise HTTPException(status_code=400, detail="Validation error: " + str(e.errors()))
-    except Exception as e:
-        print('Error:', e)
-        raise HTTPException(status_code=500, detail=str(e))
- 
-@router.get(Candidate_Routes.CANDIDATE_ME.value)
-async def candidate_me(request: Request):
-    try:
-        candidate = await get_candidate_by_id(request.state.user["id"])
-        return {"message": "success", "candidate": candidate}
-    except Exception as e:
-        print('error',e)
-        raise HTTPException(status_code=e.status_code, detail=str(e))
-
-@router.post(Candidate_Routes.PROFILE_EDIT.value)
+@router.post("/edit")
 async def edit_profile(
-    request: Request,
+    user: dict = Depends(require_candidate),
     fullName: Optional[str] = Form(None),
     bio: Optional[str] = Form(None),
     about: Optional[str] = Form(None),
@@ -131,71 +116,46 @@ async def edit_profile(
     age: Optional[str] = Form(None),
     gender: Optional[Literal["male", "female", ""]] = Form(None),
     phone: Optional[str] = Form(None),
-    skills: Optional[str] = Form(None),
-    qualification: Optional[List[Qualification]] = Form(None),
-    experience: Optional[List[Experience]] = Form(None),
-    socials: Optional[str] = Form(None),
+    skills: Optional[str] = Form(None),          # JSON array of strings
+    qualification: Optional[str] = Form(None),   # JSON array of Qualification
+    experience: Optional[str] = Form(None),      # JSON array of Experience
+    socials: Optional[str] = Form(None),         # JSON object
     resume: Optional[UploadFile] = File(None),
 ):
     try:
-        # Convert `skills` JSON string back to a Python list
-        skills_list: List[str] = json.loads(skills) if skills else []
+        skills_list = TypeAdapter(List[str]).validate_python(_json_form(skills, "skills")) if skills is not None else None
+        qualifications = TypeAdapter(List[Qualification]).validate_python(_json_form(qualification, "qualification")) if qualification is not None else None
+        experiences = TypeAdapter(List[Experience]).validate_python(_json_form(experience, "experience")) if experience is not None else None
+        socials_obj = Socials.model_validate(_json_form(socials, "socials")) if socials is not None else None
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=json.loads(e.json()))
 
-        # Convert `socials` JSON string back to a Python dictionary
-        socials_dict = json.loads(socials) if socials else {}
+    update_data = {
+        "fullName": fullName,
+        "bio": bio,
+        "about": about,
+        "address": address,
+        "age": age,
+        "gender": gender,
+        "phone": phone,
+        "skills": skills_list,
+        "qualification": [q.model_dump(mode="json", exclude_none=True) for q in qualifications] if qualifications is not None else None,
+        "experience": [x.model_dump(mode="json", exclude_none=True) for x in experiences] if experiences is not None else None,
+        "socials": socials_obj.model_dump(mode="json", exclude_none=True) if socials_obj else None,
+    }
 
-        candidate_id = request.state.user["id"]  # Extract candidate ID from request state
+    if resume:
+        update_data["resume"] = await upload_file(resume)
 
-        update_data = {
-            "fullName": fullName,
-            "bio": bio,
-            "about": about,
-            "address": address,
-            "age": age,
-            "gender": gender,
-            "phone": phone,
-            "skills": skills_list,
-            "qualification": qualification,
-            "experience": experience,
-            "socials": socials_dict,
-        }
+    updated = await update_candidate(user["id"], update_data)
+    return {"message": "Profile updated successfully", "candidate": updated}
 
 
-        # Remove None values to only update provided fields
-        update_data = {k: v for k, v in update_data.items() if v is not None}
-        
-        print(update_data)
-
-        if resume:
-            print("inside")
-            file_location = await upload_file(resume)
-            update_data["resume"] = file_location
-
-        print("herere")
-
-        updated_candidate = await update_candidate(candidate_id, update_data)
-
-        return {"message": "Profile updated successfully", "candidate": updated_candidate}
-
-    except Exception as e:
-        print("error", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get(Candidate_Routes.LIST_CANDIDATES.value)
+@router.get("/list")
 async def candidate_list():
-    try:
-        candidates = await get_all_candidates()
-        return {"message": "success", "candidates": candidates}
-    except Exception as e:
-        print('error',e)
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+    return {"message": "success", "candidates": await get_all_candidates()}
 
-@router.get(Candidate_Routes.GET_CANDIDATE_BY_ID.value)
+
+@router.get("/{id}")
 async def candidate_get_by_id(id: str):
-    try:
-        candidate = await get_candidate_by_id(id)
-        return {"message": "success", "candidate": candidate}
-    except Exception as e:
-        print('error',e)
-        raise HTTPException(status_code=e.status_code, detail=str(e))
-
+    return {"message": "success", "candidate": await get_candidate_by_id(id)}

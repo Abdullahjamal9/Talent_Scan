@@ -1,58 +1,39 @@
-from fastapi import APIRouter, HTTPException, Request
-from app.db.schemas.job_post import JobPostCreate, JobPostInDB
-from app.services.job_post import create_job, edit_job, get_job_by_id, list_jobs_by_company, list_jobs, recommended_list_jobs
-from enum import Enum
+from fastapi import APIRouter, Depends
+from app.core.deps import get_current_user, require_candidate, require_company
+from app.db.schemas.job_post import JobPostCreate, JobPostEdit
+from app.services.job_post import (
+    create_job, edit_job, get_job_by_id, list_jobs, list_jobs_by_company, recommended_list_jobs,
+)
 
 router = APIRouter()
 
-class Job_Post_Routes(str, Enum):
-    CREATE = '/create'
-    LIST = '/list'
-    RECOMMENDED_LIST = '/recommended_list'
-    GET_BY_ID = '/{id}'
-    EDIT = '/edit'
-    LIST_BY_COMPANY_ID = '/list-by-company-id/{companyId}'
 
-@router.post(Job_Post_Routes.CREATE.value)
-async def create(job: JobPostCreate):
-    try:
-        result = await create_job(job)
-        return {"message": "Job created successfully", "data": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@router.post("/create")
+async def create(job: JobPostCreate, user: dict = Depends(require_company)):
+    result = await create_job(job, user["id"])
+    return {"message": "Job created successfully", "data": result}
 
-@router.get(Job_Post_Routes.LIST.value)
-def list():
-    try:
-        return list_jobs()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-@router.get(Job_Post_Routes.RECOMMENDED_LIST.value)
-def Recommended_list(request: Request):
-    try:
-        print(request.state.user["id"])
-        return recommended_list_jobs(request.state.user["id"])
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/list")
+def list_all():
+    return list_jobs()
 
-@router.get(Job_Post_Routes.GET_BY_ID.value)
-def get_by_id(id: str):
-    try:
-        return get_job_by_id(id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-@router.post(Job_Post_Routes.EDIT.value)
-async def edit(job: JobPostInDB):
-    try:
-        return await edit_job(job.id, job)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/recommended_list")
+def recommended_list(user: dict = Depends(require_candidate)):
+    return recommended_list_jobs(user["id"])
 
-@router.get(Job_Post_Routes.LIST_BY_COMPANY_ID.value)
+
+@router.post("/edit")
+async def edit(job: JobPostEdit, user: dict = Depends(require_company)):
+    return await edit_job(job, user["id"])
+
+
+@router.get("/list-by-company-id/{companyId}")
 def list_by_company(companyId: str):
-    try:
-        return list_jobs_by_company(companyId)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return list_jobs_by_company(companyId)
+
+
+@router.get("/{id}")
+def get_by_id(id: str, user: dict = Depends(get_current_user)):
+    return get_job_by_id(id, user)

@@ -4,6 +4,8 @@ from app.api.v1.endpoints import candidate
 from app.api.v1.endpoints import company
 from app.api.v1.endpoints import job_post
 from app.api.v1.endpoints import job_application
+from app.api.v1.endpoints import dashboard
+from app.api.v1.endpoints import files
 
 api_router = APIRouter()
 
@@ -12,3 +14,5 @@ api_router.include_router(candidate.router, prefix="/candidate", tags=["Candidat
 api_router.include_router(company.router, prefix="/company", tags=["Company"])
 api_router.include_router(job_post.router, prefix="/job-post", tags=["Job Post"])
 api_router.include_router(job_application.router, prefix="/job-application", tags=["Job Application"])
+api_router.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
+api_router.include_router(files.router, prefix="/resume", tags=["Files"])

@@ -12,6 +12,12 @@ class JobType(str, Enum):
     LONG_TERM = "long term"
     CONTRACT = "contract"
 
+class GenderRestriction(str, Enum):
+    ANY = "any"
+    FEMALE = "female"
+    MALE = "male"
+
+
 class JobPostBase(BaseModel):
     company: str
     role: Optional[str] = ''
@@ -21,11 +27,12 @@ class JobPostBase(BaseModel):
     description: Optional[str] = ''
     jobType: Optional[JobType] = None
     isAcceptingApplications: Optional[bool] = True
+    genderRestriction: GenderRestriction = GenderRestriction.ANY
     createdAt: Optional[datetime] = None
     updatedAt: Optional[datetime] = None
 
 class JobPostCreate(JobPostBase):
-    pass
+    company: Optional[str] = None  # taken from the auth token
 
 class JobPostInDB(JobPostCreate):
     id: str = Field(..., alias="_id")
@@ -33,3 +40,15 @@ class JobPostInDB(JobPostCreate):
 
 class JobPostOut(JobPostInDB):
     pass
+
+
+class JobPostEdit(BaseModel):
+    id: str
+    role: Optional[str] = None
+    minimumSalary: Optional[str] = None
+    maximumSalary: Optional[str] = None
+    payingCurrency: Optional[str] = None
+    description: Optional[str] = None
+    jobType: Optional[JobType] = None
+    isAcceptingApplications: Optional[bool] = None
+    genderRestriction: Optional[GenderRestriction] = None

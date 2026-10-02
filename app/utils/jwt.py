@@ -1,31 +1,29 @@
 import jwt
-import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
+from app.core.config import JWT_SECRET_KEY, JWT_EXPIRE_DAYS
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "test-secret-key")
 ALGORITHM = "HS256"
 
-def create_jwt_token(data: dict, expires_delta: timedelta = timedelta(days=30)) -> str:
+
+def _secret() -> str:
+    if not JWT_SECRET_KEY:
+        raise RuntimeError("JWT_SECRET_KEY is not set")
+    return JWT_SECRET_KEY
+
+
+def create_jwt_token(data: dict, expires_delta: timedelta = timedelta(days=JWT_EXPIRE_DAYS)) -> str:
     """Creates a JWT token."""
     to_encode = data.copy()
-    expire = datetime.now() + expires_delta
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    to_encode["exp"] = datetime.now(timezone.utc) + expires_delta
+    return jwt.encode(to_encode, _secret(), algorithm=ALGORITHM)
+
 
 def verify_jwt_token(token: str) -> dict:
     """Verifies and decodes a JWT token."""
     try:
-        print(token)
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
+        return jwt.decode(token, _secret(), algorithms=[ALGORITHM])
     except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired.",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired.")
     except jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token.",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token.")

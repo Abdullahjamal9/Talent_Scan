@@ -1,15 +1,29 @@
+from enum import Enum
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
-class JobApplicationBase(BaseModel):
-    candidate: str  # candidateId
-    company: str  # companyId
+
+class ApplicationStatus(str, Enum):
+    """Hiring pipeline stages, in order."""
+    APPLIED = "applied"
+    SCREENING = "screening"
+    INTERVIEW = "interview"
+    OFFER = "offer"
+    HIRED = "hired"
+    REJECTED = "rejected"
+
+
+PIPELINE_STAGES = [s.value for s in ApplicationStatus]
+
+
+class JobApplyRequest(BaseModel):
     job: str  # jobPostId
 
-class JobApplicationCreate(JobApplicationBase):
-    AIScore: int
 
-class JobApplicationInDB(JobApplicationCreate):
-    id: str = Field(..., alias="_id")
+class ApplicationStatusUpdate(BaseModel):
+    status: ApplicationStatus
 
-class JobApplicationOut(JobApplicationInDB):
-    pass
+
+class ApplicationNotesUpdate(BaseModel):
+    notes: str = Field("", max_length=5000)

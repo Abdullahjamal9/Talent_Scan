@@ -9,10 +9,6 @@ class Qualification(BaseModel):
     endDate: Optional[datetime] = None
     description: Optional[str] = ""
 
-    # Optional: Override the dict method to remove None values before serialization
-    def dict(self, *args, **kwargs):
-        result = super().dict(*args, **kwargs)
-        return {key: value for key, value in result.items() if value is not None}
 
 class Experience(BaseModel):
     company_or_organization: Optional[str] = ""
@@ -21,14 +17,10 @@ class Experience(BaseModel):
     endDate: Optional[datetime] = None
     description: Optional[str] = ""
 
-    # Optional: Override the dict method to remove None values before serialization
-    def dict(self, *args, **kwargs):
-        result = super().dict(*args, **kwargs)
-        return {key: value for key, value in result.items() if value is not None}
 class Socials(BaseModel):
     linkedin: Optional[HttpUrl] = None
     facebook: Optional[HttpUrl] = None
-    github: Optional[EmailStr] = None
+    github: Optional[HttpUrl] = None
 
 class CandidateSignInRequest(BaseModel):
     email: EmailStr  # Ensures the email is a valid email format

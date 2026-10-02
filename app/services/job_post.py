@@ -1,101 +1,94 @@
-from fastapi import HTTPException
-from pymongo import MongoClient
-from pydantic import BaseModel, Field
-from typing import List, Optional
-from enum import Enum
-from bson import ObjectId
-from app.db.schemas.job_post import JobPostCreate, JobType
-from app.db.session import get_job_post_collection, get_company_collection
+import re
 from datetime import datetime
 
-async def create_job(job: JobPostCreate):
-    try:
-        collection = get_job_post_collection()
-        job_dict = job.dict()
-        job_dict["createdAt"] = datetime.now()
-        job_dict["updatedAt"] = datetime.now()
-        job_dict["jobType"] = job_dict["jobType"].value
-        print(job_dict)
-        result = collection.insert_one(job_dict)
-        return {"id": str(result.inserted_id)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+from fastapi import HTTPException
+from sqlalchemy import select
 
-async def edit_job(id: str, job: JobPostCreate):
-    try:
-        collection = get_job_post_collection()
-        update_data = job.dict(exclude_unset=True)
-        update_data["updatedAt"] = datetime.now()
-        if "jobType" in update_data and isinstance(update_data["jobType"], JobType):
-            update_data["jobType"] = update_data["jobType"].value
-        result = collection.update_one({"_id": ObjectId(id)}, {"$set": update_data})
-        if result.modified_count == 0:  
+from app.db.models import Candidate, JobPost
+from app.db.schemas.job_post import JobPostCreate, JobPostEdit
+from app.db.session import session_scope
+from app.utils.ids import parse_id
+
+JOB_FIELDS = (
+    "role", "minimumSalary", "maximumSalary", "payingCurrency",
+    "description", "jobType", "isAcceptingApplications", "genderRestriction",
+)
+
+
+async def create_job(job: JobPostCreate, company_id: str):
+    data = job.model_dump(mode="json")
+    with session_scope() as db:
+        post = JobPost(company_id=parse_id(company_id), **{k: data[k] for k in JOB_FIELDS if data[k] is not None})
+        db.add(post)
+        db.flush()
+        return {"id": str(post.id)}
+
+
+async def edit_job(job: JobPostEdit, company_id: str):
+    changes = job.model_dump(mode="json", exclude_none=True, exclude={"id"})
+    with session_scope() as db:
+        post = db.get(JobPost, parse_id(job.id))
+        if not post:
             raise HTTPException(status_code=404, detail="Job not found")
-        return {"message": "Job updated successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        if str(post.company_id) != company_id:
+            raise HTTPException(status_code=403, detail="You can only edit your own jobs")
+        for key, value in changes.items():
+            setattr(post, key, value)
+        post.updatedAt = datetime.now()
+    return {"message": "Job updated successfully"}
+
 
 def list_jobs():
-    try:
-        job_collection = get_job_post_collection()
-        company_collection = get_company_collection()
-
-        jobs = list(job_collection.find())
-        for job in jobs:
-            job["_id"] = str(job["_id"])
-
-            # Fetch the company details
-            company = company_collection.find_one({"_id": ObjectId(job["company"])}, {"password": 0})  # Exclude password
-            if company:
-                company["_id"] = str(company["_id"])  # Convert ObjectId to string
-                job["company"] = company  # Replace company ID with company object
-
-        return {"jobs": jobs}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# recommended list for candidate
-def recommended_list_jobs(candidate_id):
-    try:
-        print(candidate_id)
-
-        job_collection = get_job_post_collection()
-        company_collection = get_company_collection()
-
-        jobs = list(job_collection.find())
-        for job in jobs:
-            job["_id"] = str(job["_id"])
-
-            # Fetch the company details
-            company = company_collection.find_one({"_id": ObjectId(job["company"])}, {"password": 0})
-            if company:
-                company["_id"] = str(company["_id"])
-                job["company"] = company
-
-        return {"jobs": jobs}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    with session_scope() as db:
+        return {"jobs": [j.to_dict(with_company=True) for j in db.scalars(select(JobPost).order_by(JobPost.id.desc()))]}
 
 
-def list_jobs_by_company(companyId: str):
-    try:
-        collection = get_job_post_collection()
-        jobs = list(collection.find({"company": companyId}))
-        for job in jobs:
-            job["_id"] = str(job["_id"])
-        return { "jobs": jobs }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def eligibility_for(post: JobPost, candidate: Candidate | None) -> str:
+    """"ok", "gender_missing" (candidate must complete their profile) or "not_eligible"."""
+    restriction = post.genderRestriction or "any"
+    if restriction == "any" or candidate is None:
+        return "ok"
+    if not candidate.gender:
+        return "gender_missing"
+    return "ok" if candidate.gender == restriction else "not_eligible"
 
-def get_job_by_id(id: str):
-    try:
-        collection = get_job_post_collection()
-        job = collection.find_one({"_id": ObjectId(id)})
-        if not job:
+
+def _tokens(text: str) -> set:
+    return set(re.findall(r"[a-z0-9+#.]+", (text or "").lower()))
+
+
+def recommended_list_jobs(candidate_id: str):
+    """Jobs ranked by overlap between the candidate skills and the job text."""
+    with session_scope() as db:
+        candidate = db.get(Candidate, parse_id(candidate_id))
+        skills = [s for s in ((candidate.skills if candidate else None) or []) if s]
+
+        jobs = []
+        for post in db.scalars(select(JobPost).where(JobPost.isAcceptingApplications.is_(True))):
+            job_tokens = _tokens(f"{post.role} {post.description}")
+            matched = [s for s in skills if _tokens(s) <= job_tokens]
+            job = post.to_dict(with_company=True)
+            job["matchedSkills"] = matched
+            job["eligibility"] = eligibility_for(post, candidate)
+            job["matchScore"] = round(100 * len(matched) / len(skills), 2) if skills else 0
+            jobs.append(job)
+
+    jobs.sort(key=lambda j: j["matchScore"], reverse=True)
+    return {"jobs": jobs}
+
+
+def list_jobs_by_company(company_id: str):
+    with session_scope() as db:
+        posts = db.scalars(select(JobPost).where(JobPost.company_id == parse_id(company_id)).order_by(JobPost.id.desc()))
+        return {"jobs": [p.to_dict() for p in posts]}
+
+
+def get_job_by_id(id: str, viewer: dict | None = None):
+    with session_scope() as db:
+        post = db.get(JobPost, parse_id(id))
+        if not post:
             raise HTTPException(status_code=404, detail="Job not found")
-        job["_id"] = str(job["_id"])
+        job = post.to_dict(with_company=True)
+        if viewer and viewer.get("role") == "candidate":
+            job["eligibility"] = eligibility_for(post, db.get(Candidate, parse_id(viewer["id"])))
         return job
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

@@ -1,89 +1,60 @@
-from typing import Union
-from dotenv import load_dotenv
-from fastapi import FastAPI, Request, status, HTTPException
-from app.api.v1.routers import api_router
-from fastapi.middleware.cors import CORSMiddleware
-from .db.base import connect_to_database
-from starlette.responses import JSONResponse
-from app.utils.jwt import verify_jwt_token
-from fastapi.staticfiles import StaticFiles
 import os
 
-load_dotenv()
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
-app = FastAPI()
+from app.api.v1.routers import api_router
+from app.core.config import CORS_ORIGINS, UPLOADS_DIR
+from app.db.base import connect_to_database
+from app.utils.jwt import verify_jwt_token
 
-UPLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../uploads")
+app = FastAPI(title="Talent Scan API")
+
+# Resumes are personal data: they are not served statically, only via the authorised /api/v1/resume endpoint
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
-app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
+PUBLIC_PATHS = {
+    "/", "/docs", "/redoc", "/openapi.json",
+    "/api/v1/candidate/sign-in", "/api/v1/candidate/sign-up",
+    "/api/v1/company/sign-in", "/api/v1/company/sign-up",
+}
 
-# Allow CORS from anywhere
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods
-    allow_headers=["*"],  # Allow all headers
-)
 
 @app.middleware("http")
 async def jwt_auth_middleware(request: Request, call_next):
-    try:
-        path = request.url.path
-
-        if path.startswith("/uploads"):
-            return await call_next(request)
-        # Skip specific routes (e.g., login, signup)
-        if path in [
-            "/api/v1/candidate/sign-in", "/api/v1/candidate/sign-up",
-            "/api/v1/company/sign-in", "/api/v1/company/sign-up"
-        ]:
-            return await call_next(request)
-
-        # Skip if request is CORS preflight request
-        if request.method == "OPTIONS":
-            return await call_next(request)
-
-        # Get authorization header
-        authorization: str = request.headers.get("authorization") or request.headers.get("Authorization")
-        
-        if not authorization or "Bearer " not in authorization:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authorization header missing or malformed"
-            )
-
-        # Extract token
-        token = authorization.split(" ")[1]
-        
-        # Verify token
-        payload = verify_jwt_token(token)  # Ensure this function handles exceptions internally
-        if not payload:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired token"
-            )
-
-        # Attach user payload to request state
-        request.state.user = payload  
-
+    path = request.url.path
+    if request.method == "OPTIONS" or path in PUBLIC_PATHS:
         return await call_next(request)
 
+    try:
+        authorization = request.headers.get("authorization", "")
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authorization header missing or malformed",
+            )
+        request.state.user = verify_jwt_token(authorization.split(" ", 1)[1])
     except HTTPException as http_exc:
         return JSONResponse(content={"detail": http_exc.detail}, status_code=http_exc.status_code)
 
-    except Exception as e:
-        return JSONResponse(
-            content={"detail": "Internal server error", "error": str(e)},
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+    return await call_next(request)
+
+
+# Added after the auth middleware so CORS headers are also set on 401 responses
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 connect_to_database()
 
-# Include the API router
 app.include_router(api_router, prefix="/api/v1")
+
 
 @app.get("/")
 def read_root():
-    return "Hello World!"
+    return {"status": "ok"}
